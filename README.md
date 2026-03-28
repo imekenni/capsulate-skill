@@ -59,7 +59,7 @@ gws auth login -s gmail
 ### 4. Install the Capsulate skill
 
 ```bash
-git clone https://github.com/<your-username>/capsulate-skill ~/.claude/skills/capsulate
+git clone https://github.com/imekenni/capsulate-skill ~/.claude/skills/capsulate
 ```
 
 ## Usage
