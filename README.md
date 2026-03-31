@@ -34,7 +34,11 @@ npm install -g @anthropic-ai/claude-code
 ### 2. Install and authenticate the Google Workspace CLI
 
 ```bash
+# via npm
 npm install -g @googleworkspace/cli
+
+# via Homebrew (Mac, no Node.js required)
+brew install googleworkspace-cli
 ```
 
 Follow the official setup guide to connect your Gmail account: [googleworkspace-cli.mintlify.app](https://googleworkspace-cli.mintlify.app)
@@ -50,6 +54,8 @@ gws auth login -s gmail
 - **Add yourself as a test user.** In the Google Cloud Console, go to OAuth consent screen → Audience and add your Gmail address as a test user. Without this, Google will block the login with an "app not verified" error.
 
 - **Redirect URI mismatch.** `gws auth login` opens a browser and listens on a random local port (e.g., `http://localhost:52638`). If you see a redirect URI mismatch error, go to your OAuth client credentials in the Cloud Console and add `http://localhost` to the list of authorized redirect URIs. This covers all localhost ports.
+
+- **"Google hasn't verified this app" warning.** This is expected for personal OAuth apps in testing mode. Click "Advanced" → "Go to [app name] (unsafe)" to continue. It is safe for personal use.
 
 ### 4. Install the Capsulate skill
 
