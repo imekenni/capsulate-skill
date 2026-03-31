@@ -122,14 +122,25 @@ gws gmail +triage --query "<GENERATED_QUERY> after:YYYY/MM/DD" --format json --m
 gws gmail +triage --query "<GENERATED_QUERY>" --format json --max 500
 ```
 
+**Hint:** If the canvas type is unlikely to involve promotional emails (e.g. package tracking, invoices, job applications), consider appending `-category:promotions` to the query to exclude Gmail's Promotions tab and reduce noise. Skip this for canvases explicitly about deals, offers, or subscriptions where promotional emails are relevant.
+
 This returns a JSON object with a `messages` array, where each item has `id`, `from`, `subject`, and `date`.
 
 - If 0 results (incremental): tell the user "No new emails since last refresh." Re-open the dashboard and exit.
 - If 0 results (full): tell the user and suggest a broader query. Offer to try again with a revised query.
 - If the result contains 500 items (the requested max), warn the user that there may be more emails not included and offer to re-run with `--max 1000`.
-- Parse the JSON and extract the list of `id` values from `result.messages`.
+- Parse the JSON and extract the list of messages from `result.messages`.
 
-**Incremental deduplication:** If refreshing, load the existing canvas JSON and collect all known `_id` values. Remove any IDs from the new fetch result that are already in the saved canvas — do this before spawning any subagents. Tell the user: "Found X new emails to process (Y already extracted, skipping)."
+**Incremental deduplication:** If refreshing, load the existing canvas JSON and collect all known `_id` values. Remove any messages from the new fetch result that are already in the saved canvas — do this before spawning any subagents. Tell the user: "Found X new emails to process (Y already extracted, skipping)."
+
+**Pre-filter irrelevant emails:** Before spawning any subagents, scan the triage metadata (subject and from fields — no body fetch needed) and discard messages that are clearly irrelevant to the canvas type. Apply these rules in order:
+1. Drop messages where subject exactly matches generic noise patterns: `Re:`, `Fwd:`, `[Automated]`, `Out of Office`, `Delivery Status Notification`, `Undelivered Mail`
+2. Drop messages from known bulk-mail senders (noreply@, mailer-daemon@, bounce@, postmaster@, no-reply@) **unless** the sender domain matches a brand the user would expect (e.g. shipping carrier, known retailer)
+3. For the specific canvas type, apply a relevance heuristic to the subject using your knowledge of what is relevant — if the subject clearly cannot contain the data defined in the schema (e.g. a "Weekly digest" email for a package-tracking canvas), drop it
+
+Log the count of pre-filtered emails and tell the user: "Pre-filtered X of Y emails as irrelevant (Z remaining to extract)."
+
+Extract the `id` field from each remaining message to build the list of IDs to process.
 
 ---
 
@@ -137,7 +148,12 @@ This returns a JSON object with a `messages` array, where each item has `id`, `f
 
 Group the email IDs into batches of **5 emails per subagent**, running **4 subagents concurrently** (20 emails per round). Pause 2 seconds between rounds to respect rate limits.
 
-After each round completes, report progress to the user: "Processing emails 21–40 of 200…"
+When building each batch, include the `subject` and `from` metadata from the triage results alongside each ID — the subagent needs these to decide whether to skip without fetching the body.
+
+After each round completes:
+1. Collect the subagent results, flatten into a list, discard `_skip: true` items (count them), discard JSON parse failures (count them)
+2. **Save immediately**: merge the new items into the existing canvas JSON at `~/.capsulate/<CANVAS_NAME>.json` (create it if it doesn't exist), deduplicating by `_id` with new records overwriting old ones. Update `last_updated` and `total` on every save.
+3. Report progress to the user: "Round X/Y complete — processed emails Z–W. Saved N items so far (S skipped as irrelevant, F failed)."
 
 Each subagent receives this prompt:
 
@@ -149,38 +165,43 @@ You are extracting structured data from emails for a Capsulate canvas.
 **Canvas:** `<CANVAS_NAME>`
 **Schema:** `<SCHEMA_JSON>`
 
-**Your task:** For each email ID listed below, do the following:
-1. Fetch the email: `gws gmail +read --id <EMAIL_ID> --format json --headers`
-2. Read the full email body (decode if needed)
-3. Extract ONLY the fields defined in the schema
-4. Use `null` for fields not found in the email — do not invent or guess data
-5. Include these metadata fields in each result:
+**Your task:** For each email below (given as `id · subject · from`), do the following:
+1. First, decide from the subject and sender alone whether this email is likely to contain data matching the schema for a `<CANVAS_NAME>` canvas. If it clearly cannot (e.g. a digest, a reply chain, an unsubscribe confirmation), return `{"_id": "<ID>", "_skip": true}` immediately — do NOT fetch the body.
+2. If potentially relevant, fetch the email: `gws gmail +read --id <EMAIL_ID> --format json --headers`
+3. Read the full email body (decode if needed)
+4. Extract ONLY the fields defined in the schema
+5. Use `null` for fields not found in the email — do not invent or guess data
+6. Include these metadata fields in each result:
    - `_id`: the email ID
    - `_subject`: the email subject
    - `_from`: the sender email address
    - `_date`: the email date in ISO 8601 format
 
-**Email IDs to process:**
-`<EMAIL_ID_1>`, `<EMAIL_ID_2>`, `<EMAIL_ID_3>`, `<EMAIL_ID_4>`, `<EMAIL_ID_5>`
+**Emails to process** (format: `id · subject · from`):
+`<EMAIL_ID_1> · <SUBJECT_1> · <FROM_1>`
+`<EMAIL_ID_2> · <SUBJECT_2> · <FROM_2>`
+`<EMAIL_ID_3> · <SUBJECT_3> · <FROM_3>`
+`<EMAIL_ID_4> · <SUBJECT_4> · <FROM_4>`
+`<EMAIL_ID_5> · <SUBJECT_5> · <FROM_5>`
 
-Return ONLY a valid JSON array of objects, one per email, in the same order as the IDs above. No explanation, no markdown — just the JSON array. If an email cannot be read, include the item with all schema fields as `null` and add `"_error": "Could not read email body"`.
+Return ONLY a valid JSON array of objects, one per email, in the same order as the IDs above. No explanation, no markdown — just the JSON array. Skipped emails return `{"_id": "...", "_skip": true}`. If an email cannot be read, include the item with all schema fields as `null` and add `"_error": "Could not read email body"`.
 
 ---
 
-Collect all subagent responses. Each response should be a JSON array — flatten all arrays into a single list. Discard any items that fail JSON parsing, but keep a count. After all rounds complete, tell the user: "Extracted data from X of Y emails (Z failed)." If more than 20% failed, warn the user and suggest re-running.
-
-**On refresh:** merge extracted items with existing canvas items. Deduplicate by `_id`, with new records overwriting old ones (reflects updated email state).
+Collect all subagent responses for the round. Each response should be a JSON array — flatten all arrays into a single list. Discard items with `_skip: true` (irrelevant, body not fetched). Discard items that fail JSON parsing, but keep a count. After all rounds complete, tell the user: "Done — extracted data from X of Y emails (S skipped as irrelevant, Z failed)." If more than 20% failed (excluding skips), warn the user and suggest re-running.
 
 ---
 
 ## Step 4 — Persist Locally
 
-Ensure the capsulate data directory exists:
+The canvas JSON is saved incrementally after each round in Step 3, so by the time all rounds finish, `~/.capsulate/<CANVAS_NAME>.json` is already complete and up-to-date.
+
+Ensure the directory exists before the first round:
 ```bash
 mkdir -p ~/.capsulate
 ```
 
-Write the canvas data to `~/.capsulate/<CANVAS_NAME>.json`:
+The JSON format written on each incremental save:
 
 ```json
 {
@@ -191,12 +212,12 @@ Write the canvas data to `~/.capsulate/<CANVAS_NAME>.json`:
   "last_updated": "<ISO_8601_TIMESTAMP>",
   "total": "<NUMBER_OF_ITEMS>",
   "items": [
-    "...extracted items..."
+    "...all extracted items so far..."
   ]
 }
 ```
 
-Tell the user: "Saved `<TOTAL>` items to `~/.capsulate/<CANVAS_NAME>.json`"
+After all rounds finish, tell the user: "Saved `<TOTAL>` items to `~/.capsulate/<CANVAS_NAME>.json`"
 
 ---
 
