@@ -82,10 +82,10 @@ Sanitize the slug: lowercase, replace spaces and special characters with hyphens
 ### 1b. Gmail Search Query
 A Gmail search string that will find the most relevant emails. Be specific to avoid noise.
 Examples:
-- Subscriptions: `subject:(trial OR subscription OR renewal OR "free trial") category:updates`
-- Packages: `subject:(shipped OR delivered OR tracking OR "out for delivery")`
-- Invoices: `subject:(invoice OR receipt OR "order confirmation" OR payment) has:attachment`
-- Job apps: `subject:(application OR interview OR "thank you for applying" OR offer)`
+- Subscriptions: `subject:(trial OR subscription OR renewal OR "free trial") -category:promotions`
+- Packages: `subject:(shipped OR delivered OR tracking OR "out for delivery") -category:promotions`
+- Invoices: `subject:(invoice OR receipt OR "order confirmation" OR payment) -category:promotions`
+- Job apps: `subject:(application OR interview OR "thank you for applying" OR offer) -category:promotions`
 
 ### 1c. Extraction Schema
 A JSON object defining what to extract from each email. Keep fields concise and typed.
