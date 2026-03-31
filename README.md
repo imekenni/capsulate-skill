@@ -31,30 +31,19 @@ Everything runs on your machine. Your email data never leaves your computer.
 npm install -g @anthropic-ai/claude-code
 ```
 
-### 2. Install the Google Workspace CLI
+### 2. Install and authenticate the Google Workspace CLI
 
 ```bash
 npm install -g @googleworkspace/cli
 ```
 
-### 3. Connect your Gmail
+Follow the official setup guide to connect your Gmail account: [googleworkspace-cli.mintlify.app](https://googleworkspace-cli.mintlify.app)
 
-You'll need a Google Cloud project with the Gmail API enabled. This is a one-time setup.
+The short version: create a GCP project, enable the Gmail API, create Desktop OAuth credentials, save `client_secret.json` to `~/.config/gws/`, then run:
 
-**Quick setup** (requires `gcloud` CLI):
 ```bash
-gws auth setup
 gws auth login -s gmail
 ```
-
-**Manual setup** (without `gcloud`):
-1. Go to [console.cloud.google.com](https://console.cloud.google.com)
-2. Create a new project
-3. Enable the Gmail API
-4. Create OAuth credentials → Desktop app type
-5. Add your Gmail address as a Test user
-6. Download `client_secret.json` to `~/.config/gws/`
-7. Run `gws auth login -s gmail`
 
 ### 4. Install the Capsulate skill
 
