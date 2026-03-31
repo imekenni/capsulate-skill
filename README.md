@@ -45,7 +45,7 @@ The short version: create a GCP project, enable the Gmail API, create Desktop OA
 gws auth login -s gmail
 ```
 
-**Two gotchas to watch for:**
+**Two common setup issues:**
 
 - **Add yourself as a test user.** In the Google Cloud Console, go to OAuth consent screen → Audience and add your Gmail address as a test user. Without this, Google will block the login with an "app not verified" error.
 
