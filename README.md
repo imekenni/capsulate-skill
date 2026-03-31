@@ -45,6 +45,12 @@ The short version: create a GCP project, enable the Gmail API, create Desktop OA
 gws auth login -s gmail
 ```
 
+**Two gotchas to watch for:**
+
+- **Add yourself as a test user.** In the Google Cloud Console, go to OAuth consent screen → Audience and add your Gmail address as a test user. Without this, Google will block the login with an "app not verified" error.
+
+- **Redirect URI mismatch.** `gws auth login` opens a browser and listens on a random local port (e.g., `http://localhost:52638`). If you see a redirect URI mismatch error, go to your OAuth client credentials in the Cloud Console and add `http://localhost` to the list of authorized redirect URIs. This covers all localhost ports.
+
 ### 4. Install the Capsulate skill
 
 ```bash
