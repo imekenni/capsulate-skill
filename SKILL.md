@@ -67,12 +67,17 @@ Proceed from Step 1 as normal.
 
 ## Step 1 — Define the Canvas
 
-Ask the user:
+Ask the user two questions:
 
 > **What do you want to track from your emails?**
 > Examples: "subscription trials and renewals", "package deliveries", "invoices and receipts", "job applications", "event invitations"
 
-Based on their answer, generate three things and confirm with the user before proceeding:
+> **How far back should I look?**
+> Options: last 30 days, last 3 months, last 6 months, last year, or all time
+
+Convert their answer to a `after:YYYY/MM/DD` date string based on today's date. Use `all time` to mean no date filter. Store this as the canvas's **time range**.
+
+Based on their answers, generate three things and confirm with the user before proceeding:
 
 ### 1a. Canvas Name
 A short slug, e.g. `subscription-trials`, `package-tracking`, `invoices`
@@ -102,7 +107,7 @@ Example for subscriptions:
 }
 ```
 
-Show the canvas name, query, and schema to the user and ask: "Does this look right? I'll search your Gmail and extract data based on this."
+Show the canvas name, query, time range, and schema to the user and ask: "Does this look right? I'll search your Gmail and extract data based on this."
 
 ---
 
@@ -112,22 +117,25 @@ Once confirmed, build the query and search Gmail for matching emails.
 
 **Promotions hint:** If the canvas type is unlikely to involve promotional emails (e.g. package tracking, invoices, job applications), append `-category:promotions` to exclude Gmail's Promotions tab and reduce noise. Skip this for canvases explicitly about deals, offers, or subscriptions where promotional emails are relevant.
 
-**Incremental mode** (refreshing an existing canvas): append a date filter to only fetch emails newer than the canvas's `last_updated` timestamp. Format: `after:YYYY/MM/DD`.
+**Incremental mode** (refreshing an existing canvas): use the canvas's `last_updated` timestamp as the date filter to only fetch new emails.
 
 ```bash
 gws gmail +triage --query "<GENERATED_QUERY> after:YYYY/MM/DD" --format json --max 500
 ```
 
-**Full mode** (new canvas or schema update):
+**Full mode** (new canvas or schema update): apply the time range chosen in Step 1. If the user chose "all time", omit the `after:` filter.
+
 ```bash
-gws gmail +triage --query "<GENERATED_QUERY>" --format json --max 500
+gws gmail +triage --query "<GENERATED_QUERY> after:YYYY/MM/DD" --format json --max 500
 ```
 
 This returns a JSON object with a `messages` array, where each item has `id`, `from`, `subject`, and `date`.
 
 - If 0 results (incremental): tell the user "No new emails since last refresh." Re-open the dashboard and exit.
-- If 0 results (full): tell the user and suggest a broader query. Offer to try again with a revised query.
-- If the result contains 500 items (the requested max), warn the user that there may be more emails not included and offer to re-run with `--max 1000`.
+- If 0 results (full): tell the user and suggest either a broader query or a wider time range. Offer to try again.
+- If the result contains 500 items, warn the user that there may be more emails not included within the selected time range and offer to re-run with `--max 1000`.
+
+**Do not proceed to extraction. Always run Step 2b next to filter and deduplicate the results before spawning any subagents.**
 
 ---
 
@@ -144,7 +152,9 @@ Before spawning any subagents, reduce the message list in two passes:
 
 Tell the user: "Pre-filtered X of Y emails as irrelevant (Z remaining to extract)."
 
-Extract the `id` field from each remaining message to build the list of IDs to process.
+Extract the `id` field from each remaining message to build the final list of IDs to process.
+
+**Do not proceed to Step 3 until both deduplication and pre-filtering are complete and the final ID list is ready.**
 
 ---
 
@@ -167,6 +177,7 @@ After each round completes:
      "canvas": "<CANVAS_NAME>",
      "description": "<USER'S ORIGINAL DESCRIPTION>",
      "query": "<GMAIL_QUERY>",
+     "time_range": "<e.g. last 30 days | last 3 months | all time>",
      "schema": "<SCHEMA_JSON>",
      "last_updated": "<ISO_8601_TIMESTAMP>",
      "total": <NUMBER_OF_ITEMS>,
