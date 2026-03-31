@@ -87,7 +87,6 @@ All data is saved locally:
 
 ## Requirements
 
-- Node.js 18+
 - Claude Code CLI
 - Google Workspace CLI (`gws`)
 - A Gmail account
