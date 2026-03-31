@@ -101,3 +101,7 @@ The `gws` CLI fetches emails directly from Gmail to your local machine. Email co
 ## License
 
 MIT
+
+---
+
+Built by the team behind [Capsulate](https://capsulate.app) — the cloud version with automatic sync, AI analysis, and multi-device access. [Join the waitlist →](https://capsulate.app)
