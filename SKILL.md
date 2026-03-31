@@ -12,10 +12,9 @@ Transform your inbox into structured, queryable dashboards using AI. No backend 
 
 1. You describe what you want to track from your emails
 2. Claude generates an extraction schema and Gmail search query
-3. Your emails are searched and fetched via the `gws` CLI
-4. Subagents extract structured data from batches of emails in parallel
-5. Data is saved locally to `~/.capsulate/<canvas>.json`
-6. A self-contained HTML dashboard is generated and opened in your browser
+3. Your emails are searched, filtered, and deduplicated
+4. Subagents extract structured data from batches of emails in parallel, saving after each round
+5. A self-contained HTML dashboard is generated and opened in your browser
 
 ---
 
@@ -56,10 +55,10 @@ If the user runs `/capsulate` and canvases already exist at `~/.capsulate/`, lis
 Run `open ~/.capsulate/<CANVAS_NAME>.html` and exit.
 
 ### Option: Refresh
-Skip Step 1. Load the saved canvas JSON to get the existing query, schema, known IDs, and `last_updated` timestamp. Proceed to Step 2 in **incremental mode**.
+Skip Step 1. Load the saved canvas JSON to get the existing query, schema, known IDs, and `last_updated` timestamp. Proceed to Step 2a in **incremental mode**.
 
 ### Option: Update schema
-Ask the user what fields to add, remove, or change. Show the current schema and proposed new schema for confirmation. Then re-run Steps 2–5 against **all** emails (not incremental), replacing all existing items. Merge by `_id`: overwrite existing records, keep any that weren't in the new result set.
+Ask the user what fields to add, remove, or change. Show the current schema and proposed new schema for confirmation. Then re-run Steps 2a–4 against **all** emails (not incremental), replacing all existing items. Merge by `_id`: overwrite existing records, keep any that weren't in the new result set.
 
 ### Option: Create
 Proceed from Step 1 as normal.
@@ -107,11 +106,13 @@ Show the canvas name, query, and schema to the user and ask: "Does this look rig
 
 ---
 
-## Step 2 — Search Gmail
+## Step 2a — Search Gmail
 
-Once confirmed, search Gmail for matching emails.
+Once confirmed, build the query and search Gmail for matching emails.
 
-**Incremental mode** (refreshing an existing canvas): append a date filter to the query to only fetch emails newer than the canvas's `last_updated` timestamp. Format: `after:YYYY/MM/DD`.
+**Promotions hint:** If the canvas type is unlikely to involve promotional emails (e.g. package tracking, invoices, job applications), append `-category:promotions` to exclude Gmail's Promotions tab and reduce noise. Skip this for canvases explicitly about deals, offers, or subscriptions where promotional emails are relevant.
+
+**Incremental mode** (refreshing an existing canvas): append a date filter to only fetch emails newer than the canvas's `last_updated` timestamp. Format: `after:YYYY/MM/DD`.
 
 ```bash
 gws gmail +triage --query "<GENERATED_QUERY> after:YYYY/MM/DD" --format json --max 500
@@ -122,23 +123,26 @@ gws gmail +triage --query "<GENERATED_QUERY> after:YYYY/MM/DD" --format json --m
 gws gmail +triage --query "<GENERATED_QUERY>" --format json --max 500
 ```
 
-**Hint:** If the canvas type is unlikely to involve promotional emails (e.g. package tracking, invoices, job applications), consider appending `-category:promotions` to the query to exclude Gmail's Promotions tab and reduce noise. Skip this for canvases explicitly about deals, offers, or subscriptions where promotional emails are relevant.
-
 This returns a JSON object with a `messages` array, where each item has `id`, `from`, `subject`, and `date`.
 
 - If 0 results (incremental): tell the user "No new emails since last refresh." Re-open the dashboard and exit.
 - If 0 results (full): tell the user and suggest a broader query. Offer to try again with a revised query.
 - If the result contains 500 items (the requested max), warn the user that there may be more emails not included and offer to re-run with `--max 1000`.
-- Parse the JSON and extract the list of messages from `result.messages`.
 
-**Incremental deduplication:** If refreshing, load the existing canvas JSON and collect all known `_id` values. Remove any messages from the new fetch result that are already in the saved canvas — do this before spawning any subagents. Tell the user: "Found X new emails to process (Y already extracted, skipping)."
+---
 
-**Pre-filter irrelevant emails:** Before spawning any subagents, scan the triage metadata (subject and from fields — no body fetch needed) and discard messages that are clearly irrelevant to the canvas type. Apply these rules in order:
-1. Drop messages where subject exactly matches generic noise patterns: `Re:`, `Fwd:`, `[Automated]`, `Out of Office`, `Delivery Status Notification`, `Undelivered Mail`
-2. Drop messages from known bulk-mail senders (noreply@, mailer-daemon@, bounce@, postmaster@, no-reply@) **unless** the sender domain matches a brand the user would expect (e.g. shipping carrier, known retailer)
-3. For the specific canvas type, apply a relevance heuristic to the subject using your knowledge of what is relevant — if the subject clearly cannot contain the data defined in the schema (e.g. a "Weekly digest" email for a package-tracking canvas), drop it
+## Step 2b — Filter & Deduplicate
 
-Log the count of pre-filtered emails and tell the user: "Pre-filtered X of Y emails as irrelevant (Z remaining to extract)."
+Before spawning any subagents, reduce the message list in two passes:
+
+**Deduplicate:** If refreshing, load the existing canvas JSON and collect all known `_id` values. Remove any messages already in the saved canvas. Tell the user: "Found X new emails to process (Y already extracted, skipping)."
+
+**Pre-filter irrelevant emails:** Scan the triage metadata (subject and from — no body fetch needed) and discard clearly irrelevant messages. Apply in order:
+1. Drop messages where subject matches generic noise: `Re:`, `Fwd:`, `[Automated]`, `Out of Office`, `Delivery Status Notification`, `Undelivered Mail`
+2. Drop messages from bulk-mail senders (noreply@, mailer-daemon@, bounce@, postmaster@, no-reply@) **unless** the sender domain matches a brand relevant to the canvas (e.g. a shipping carrier for package tracking)
+3. Apply a canvas-type relevance heuristic to the subject — if the subject clearly cannot contain data matching the schema (e.g. "Weekly digest" for a package-tracking canvas), drop it
+
+Tell the user: "Pre-filtered X of Y emails as irrelevant (Z remaining to extract)."
 
 Extract the `id` field from each remaining message to build the list of IDs to process.
 
@@ -146,13 +150,29 @@ Extract the `id` field from each remaining message to build the list of IDs to p
 
 ## Step 3 — Extract Data (Parallel Subagents)
 
+Ensure the data directory exists before the first round:
+```bash
+mkdir -p ~/.capsulate
+```
+
 Group the email IDs into batches of **5 emails per subagent**, running **4 subagents concurrently** (20 emails per round). Pause 2 seconds between rounds to respect rate limits.
 
 When building each batch, include the `subject` and `from` metadata from the triage results alongside each ID — the subagent needs these to decide whether to skip without fetching the body.
 
 After each round completes:
 1. Collect the subagent results, flatten into a list, discard `_skip: true` items (count them), discard JSON parse failures (count them)
-2. **Save immediately**: merge the new items into the existing canvas JSON at `~/.capsulate/<CANVAS_NAME>.json` (create it if it doesn't exist), deduplicating by `_id` with new records overwriting old ones. Update `last_updated` and `total` on every save.
+2. **Save immediately** to `~/.capsulate/<CANVAS_NAME>.json`: merge new items with any existing items, deduplicate by `_id` with new records overwriting old ones, and update `last_updated` and `total`. Use this format:
+   ```json
+   {
+     "canvas": "<CANVAS_NAME>",
+     "description": "<USER'S ORIGINAL DESCRIPTION>",
+     "query": "<GMAIL_QUERY>",
+     "schema": "<SCHEMA_JSON>",
+     "last_updated": "<ISO_8601_TIMESTAMP>",
+     "total": <NUMBER_OF_ITEMS>,
+     "items": [ ...all extracted items so far... ]
+   }
+   ```
 3. Report progress to the user: "Round X/Y complete — processed emails Z–W. Saved N items so far (S skipped as irrelevant, F failed)."
 
 Each subagent receives this prompt:
@@ -192,36 +212,7 @@ Collect all subagent responses for the round. Each response should be a JSON arr
 
 ---
 
-## Step 4 — Persist Locally
-
-The canvas JSON is saved incrementally after each round in Step 3, so by the time all rounds finish, `~/.capsulate/<CANVAS_NAME>.json` is already complete and up-to-date.
-
-Ensure the directory exists before the first round:
-```bash
-mkdir -p ~/.capsulate
-```
-
-The JSON format written on each incremental save:
-
-```json
-{
-  "canvas": "<CANVAS_NAME>",
-  "description": "<USER'S ORIGINAL DESCRIPTION>",
-  "query": "<GMAIL_QUERY>",
-  "schema": "<SCHEMA_JSON>",
-  "last_updated": "<ISO_8601_TIMESTAMP>",
-  "total": "<NUMBER_OF_ITEMS>",
-  "items": [
-    "...all extracted items so far..."
-  ]
-}
-```
-
-After all rounds finish, tell the user: "Saved `<TOTAL>` items to `~/.capsulate/<CANVAS_NAME>.json`"
-
----
-
-## Step 5 — Generate Dashboard
+## Step 4 — Generate Dashboard
 
 Generate a self-contained HTML file at `~/.capsulate/<CANVAS_NAME>.html`.
 
@@ -272,7 +263,7 @@ Tell the user:
 
 ## Error Handling
 
-- **gws rate limit**: the 2-second pause between rounds (Step 3) should prevent this. If a rate limit error still occurs, pause 10 seconds and retry the current batch once before discarding.
+- **gws rate limit**: the 2-second pause between rounds should prevent this. If a rate limit error still occurs, pause 10 seconds and retry the current batch once before discarding.
 - **Email body empty or unreadable**: include the item with all schema fields as `null` and `_error: "Could not read email body"`
 - **gws auth expired**: tell the user to run `gws auth login -s gmail` and try again
 - **Disk write error**: tell the user to check permissions on `~/.capsulate/`
