@@ -57,6 +57,8 @@ gws auth login -s gmail
 
 - **"Google hasn't verified this app" warning.** This is expected for personal OAuth apps in testing mode. Click "Advanced" → "Go to [app name] (unsafe)" to continue. It is safe for personal use.
 
+- **Gmail API not enabled.** If you see a 403 `accessNotConfigured` error on first use, the Gmail API needs to be enabled in your Google Cloud project. Go to APIs & Services → Library, search for "Gmail API", and click Enable. Wait a minute or two for it to propagate before retrying.
+
 ### 4. Install the Capsulate skill
 
 ```bash
